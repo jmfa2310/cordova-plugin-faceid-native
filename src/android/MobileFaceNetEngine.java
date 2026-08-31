@@ -1,4 +1,4 @@
-﻿package com.company.faceidnative;
+package com.company.faceidnative;
 
 import android.content.Context;
 import android.graphics.Bitmap;
