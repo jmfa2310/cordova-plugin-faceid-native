@@ -1,6 +1,6 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Offline native face recognition Cordova plugin for OutSystems O11 Android.",
   "cordova": {
     "id": "com.company.faceidnative",
