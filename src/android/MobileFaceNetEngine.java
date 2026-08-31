@@ -1,9 +1,9 @@
-package com.company.faceidnative;
+﻿package com.company.faceidnative;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 
-import com.google.ai.edge.litert.Interpreter;
+import org.tensorflow.lite.Interpreter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -154,3 +154,4 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         interpreter.close();
     }
 }
+
