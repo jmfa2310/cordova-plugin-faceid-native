@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
+        id="com.company.faceidnative"
+        version="1.0.0">
+  <name>FaceIDNative</name>
+  <description>Offline native face recognition for OutSystems O11 Android.</description>
+  <license>MIT</license>
+
+  <js-module src="www/FaceID.js" name="FaceID">
+    <clobbers target="FaceIDNative" />
+  </js-module>
+
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="FaceIDPlugin">
+        <param name="android-package" value="com.company.faceidnative.FaceIDPlugin" />
+      </feature>
+    </config-file>
+
+    <framework src="com.google.mlkit:face-detection:16.1.7" />
+    <framework src="com.google.ai.edge.litert:litert:1.4.2" />
+    <framework src="com.google.ai.edge.litert:litert-api:1.4.2" />
+
+    <source-file src="src/android/FaceIDPlugin.java"
+                 target-dir="app/src/main/java/com/company/faceidnative" />
+    <source-file src="src/android/MobileFaceNetEngine.java"
+                 target-dir="app/src/main/java/com/company/faceidnative" />
+    <resource-file src="src/android/assets/mobilefacenet.tflite"
+                   target="app/src/main/assets/mobilefacenet.tflite" />
+  </platform>
+</plugin>

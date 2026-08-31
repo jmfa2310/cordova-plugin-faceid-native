@@ -1,0 +1,20 @@
+{
+  "name": "cordova-plugin-faceid-native",
+  "version": "1.0.0",
+  "description": "Offline native face recognition Cordova plugin for OutSystems O11 Android.",
+  "cordova": {
+    "id": "com.company.faceidnative",
+    "platforms": [
+      "android"
+    ]
+  },
+  "keywords": [
+    "ecosystem:cordova",
+    "outsystems",
+    "face-recognition",
+    "offline",
+    "litert",
+    "mobilefacenet"
+  ],
+  "license": "MIT"
+}
