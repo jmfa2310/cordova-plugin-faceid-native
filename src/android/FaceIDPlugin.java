@@ -4,7 +4,11 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PointF;
 import android.graphics.Rect;
 import android.util.Base64;
 
@@ -16,6 +20,7 @@ import com.google.mlkit.vision.face.Face;
 import com.google.mlkit.vision.face.FaceDetection;
 import com.google.mlkit.vision.face.FaceDetector;
 import com.google.mlkit.vision.face.FaceDetectorOptions;
+import com.google.mlkit.vision.face.FaceLandmark;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -702,12 +707,21 @@ public class FaceIDPlugin extends CordovaPlugin {
 
         Bitmap faceCrop =
                 detectAndCropSingleFace(bitmap);
+        Bitmap mirroredFace = null;
 
         try {
             float[] current =
                     engine.embedding(faceCrop);
 
+            // Camera front previews are commonly mirrored. CameraX's saved
+            // JPEG can differ by device/OEM, so compare a horizontally
+            // mirrored aligned face as a safe fallback.
+            mirroredFace = mirrorHorizontal(faceCrop);
+            float[] currentMirrored =
+                    engine.embedding(mirroredFace);
+
             EmployeeTemplate best = null;
+            boolean bestUsedMirror = false;
 
             double bestSimilarity = -1.0;
             double secondSimilarity = -1.0;
@@ -715,12 +729,29 @@ public class FaceIDPlugin extends CordovaPlugin {
             for (EmployeeTemplate template :
                     templates) {
 
-                double similarity =
+                double normalSimilarity =
                         MobileFaceNetEngine
                                 .cosineSimilarity(
                                         current,
                                         template.descriptor
                                 );
+
+                double mirroredSimilarity =
+                        MobileFaceNetEngine
+                                .cosineSimilarity(
+                                        currentMirrored,
+                                        template.descriptor
+                                );
+
+                double similarity =
+                        Math.max(
+                                normalSimilarity,
+                                mirroredSimilarity
+                        );
+
+                boolean usedMirror =
+                        mirroredSimilarity >
+                                normalSimilarity;
 
                 if (similarity >
                         bestSimilarity) {
@@ -733,6 +764,9 @@ public class FaceIDPlugin extends CordovaPlugin {
 
                     best =
                             template;
+
+                    bestUsedMirror =
+                            usedMirror;
 
                 } else if (similarity >
                         secondSimilarity) {
@@ -778,6 +812,14 @@ public class FaceIDPlugin extends CordovaPlugin {
                     "minGap",
                     minGap
             );
+            result.put(
+                    "preprocess",
+                    "LANDMARK_ALIGN_V1"
+            );
+            result.put(
+                    "mirrorUsed",
+                    bestUsedMirror
+            );
 
             if (found && best != null) {
                 result.put(
@@ -814,6 +856,7 @@ public class FaceIDPlugin extends CordovaPlugin {
             return result;
 
         } finally {
+            recycle(mirroredFace);
             recycle(faceCrop);
         }
     }
@@ -877,6 +920,18 @@ public class FaceIDPlugin extends CordovaPlugin {
             );
         }
 
+        Bitmap aligned =
+                alignFaceFromLandmarks(
+                        bitmap,
+                        face
+                );
+
+        if (aligned != null) {
+            return aligned;
+        }
+
+        // Fallback for rare images where ML Kit cannot provide the
+        // landmarks. This keeps descriptor generation functional.
         return cropSquareWithMargin(
                 bitmap,
                 box,
@@ -895,11 +950,11 @@ public class FaceIDPlugin extends CordovaPlugin {
                         new FaceDetectorOptions.Builder()
                                 .setPerformanceMode(
                                         FaceDetectorOptions
-                                                .PERFORMANCE_MODE_FAST
+                                                .PERFORMANCE_MODE_ACCURATE
                                 )
                                 .setLandmarkMode(
                                         FaceDetectorOptions
-                                                .LANDMARK_MODE_NONE
+                                                .LANDMARK_MODE_ALL
                                 )
                                 .setClassificationMode(
                                         FaceDetectorOptions
@@ -1277,6 +1332,210 @@ public class FaceIDPlugin extends CordovaPlugin {
         }
 
         return rotated;
+    }
+
+    /**
+     * Aligns the face to the canonical 112x112 geometry used by common
+     * MobileFaceNet/ArcFace pipelines. Three landmarks are enough for an
+     * affine transformation: image-left eye, image-right eye and nose base.
+     *
+     * Sorting the eyes by X makes the transform stable regardless of ML Kit's
+     * anatomical left/right naming. The match path also tests a mirrored copy
+     * to tolerate front-camera OEM mirroring differences.
+     */
+    private static Bitmap alignFaceFromLandmarks(
+            Bitmap bitmap,
+            Face face
+    ) {
+        FaceLandmark leftEyeLandmark =
+                face.getLandmark(
+                        FaceLandmark.LEFT_EYE
+                );
+
+        FaceLandmark rightEyeLandmark =
+                face.getLandmark(
+                        FaceLandmark.RIGHT_EYE
+                );
+
+        if (leftEyeLandmark == null ||
+                rightEyeLandmark == null) {
+            return null;
+        }
+
+        PointF eyeA =
+                leftEyeLandmark.getPosition();
+
+        PointF eyeB =
+                rightEyeLandmark.getPosition();
+
+        PointF imageLeftEye;
+        PointF imageRightEye;
+
+        if (eyeA.x <= eyeB.x) {
+            imageLeftEye = eyeA;
+            imageRightEye = eyeB;
+        } else {
+            imageLeftEye = eyeB;
+            imageRightEye = eyeA;
+        }
+
+        float eyeDistance =
+                distance(
+                        imageLeftEye,
+                        imageRightEye
+                );
+
+        if (eyeDistance < 8.0f) {
+            return null;
+        }
+
+        FaceLandmark noseLandmark =
+                face.getLandmark(
+                        FaceLandmark.NOSE_BASE
+                );
+
+        Matrix transform =
+                new Matrix();
+
+        boolean transformOk;
+
+        if (noseLandmark != null) {
+            PointF nose =
+                    noseLandmark.getPosition();
+
+            float[] src = new float[] {
+                    imageLeftEye.x,
+                    imageLeftEye.y,
+                    imageRightEye.x,
+                    imageRightEye.y,
+                    nose.x,
+                    nose.y
+            };
+
+            // Canonical 112x112 three-point subset from the widely-used
+            // five-point ArcFace/MobileFaceNet alignment template.
+            float[] dst = new float[] {
+                    38.2946f,
+                    51.6963f,
+                    73.5318f,
+                    51.5014f,
+                    56.0252f,
+                    71.7366f
+            };
+
+            transformOk =
+                    transform.setPolyToPoly(
+                            src,
+                            0,
+                            dst,
+                            0,
+                            3
+                    );
+
+        } else {
+            // Two-point similarity transform fallback: scale, rotation and
+            // translation based on the eyes only.
+            float[] src = new float[] {
+                    imageLeftEye.x,
+                    imageLeftEye.y,
+                    imageRightEye.x,
+                    imageRightEye.y
+            };
+
+            float[] dst = new float[] {
+                    38.2946f,
+                    51.6963f,
+                    73.5318f,
+                    51.5014f
+            };
+
+            transformOk =
+                    transform.setPolyToPoly(
+                            src,
+                            0,
+                            dst,
+                            0,
+                            2
+                    );
+        }
+
+        if (!transformOk) {
+            return null;
+        }
+
+        Bitmap aligned =
+                Bitmap.createBitmap(
+                        MobileFaceNetEngine.INPUT_SIZE,
+                        MobileFaceNetEngine.INPUT_SIZE,
+                        Bitmap.Config.ARGB_8888
+                );
+
+        Canvas canvas =
+                new Canvas(aligned);
+
+        canvas.drawColor(
+                Color.BLACK
+        );
+
+        Paint paint =
+                new Paint(
+                        Paint.ANTI_ALIAS_FLAG |
+                                Paint.FILTER_BITMAP_FLAG |
+                                Paint.DITHER_FLAG
+                );
+
+        canvas.drawBitmap(
+                bitmap,
+                transform,
+                paint
+        );
+
+        return aligned;
+    }
+
+    private static float distance(
+            PointF a,
+            PointF b
+    ) {
+        float dx =
+                a.x - b.x;
+
+        float dy =
+                a.y - b.y;
+
+        return (float)
+                Math.sqrt(
+                        dx * dx +
+                                dy * dy
+                );
+    }
+
+    private static Bitmap mirrorHorizontal(
+            Bitmap bitmap
+    ) {
+        if (bitmap == null) {
+            return null;
+        }
+
+        Matrix matrix =
+                new Matrix();
+
+        matrix.setScale(
+                -1.0f,
+                1.0f,
+                bitmap.getWidth() / 2.0f,
+                bitmap.getHeight() / 2.0f
+        );
+
+        return Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.getWidth(),
+                bitmap.getHeight(),
+                matrix,
+                true
+        );
     }
 
     private static Bitmap cropSquareWithMargin(
