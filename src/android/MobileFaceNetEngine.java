@@ -23,28 +23,34 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         ByteBuffer model = loadModel(context, MODEL_ASSET);
 
         Interpreter.Options options = new Interpreter.Options();
-        options.setNumThreads(Math.max(2, Math.min(4,
-                Runtime.getRuntime().availableProcessors())));
+        options.setNumThreads(Math.max(
+                2,
+                Math.min(4, Runtime.getRuntime().availableProcessors())
+        ));
 
         interpreter = new Interpreter(model, options);
 
         int[] inputShape = interpreter.getInputTensor(0).shape();
         int[] outputShape = interpreter.getOutputTensor(0).shape();
 
-        if (inputShape.length != 4 || inputShape[0] != 1 ||
+        if (inputShape.length != 4 ||
+                inputShape[0] != 1 ||
                 inputShape[1] != INPUT_SIZE ||
                 inputShape[2] != INPUT_SIZE ||
                 inputShape[3] != 3) {
             interpreter.close();
             throw new IllegalStateException(
-                    "Unexpected model input. Expected [1,112,112,3].");
+                    "Unexpected model input. Expected [1,112,112,3]."
+            );
         }
 
-        if (outputShape.length != 2 || outputShape[0] != 1 ||
+        if (outputShape.length != 2 ||
+                outputShape[0] != 1 ||
                 outputShape[1] != EMBEDDING_SIZE) {
             interpreter.close();
             throw new IllegalStateException(
-                    "Unexpected model output. Expected [1,192].");
+                    "Unexpected model output. Expected [1,192]."
+            );
         }
     }
 
@@ -54,17 +60,27 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         }
 
         Bitmap resized = Bitmap.createScaledBitmap(
-                faceBitmap, INPUT_SIZE, INPUT_SIZE, true);
+                faceBitmap,
+                INPUT_SIZE,
+                INPUT_SIZE,
+                true
+        );
 
         ByteBuffer input = ByteBuffer.allocateDirect(
-                INPUT_SIZE * INPUT_SIZE * 3 * 4)
-                .order(ByteOrder.nativeOrder());
+                INPUT_SIZE * INPUT_SIZE * 3 * 4
+        ).order(ByteOrder.nativeOrder());
 
         int[] pixels = new int[INPUT_SIZE * INPUT_SIZE];
-        resized.getPixels(pixels, 0, INPUT_SIZE,
-                0, 0, INPUT_SIZE, INPUT_SIZE);
+        resized.getPixels(
+                pixels,
+                0,
+                INPUT_SIZE,
+                0,
+                0,
+                INPUT_SIZE,
+                INPUT_SIZE
+        );
 
-        // MobileFaceNet preprocessing: (RGB - 127.5) / 128.0
         for (int pixel : pixels) {
             input.putFloat((((pixel >> 16) & 0xFF) - 127.5f) / 128.0f);
             input.putFloat((((pixel >> 8) & 0xFF) - 127.5f) / 128.0f);
@@ -88,9 +104,13 @@ public final class MobileFaceNetEngine implements AutoCloseable {
 
     private static void l2Normalize(float[] vector) {
         double sum = 0.0;
-        for (float value : vector) sum += value * value;
+
+        for (float value : vector) {
+            sum += value * value;
+        }
 
         double norm = Math.sqrt(Math.max(sum, 1e-12));
+
         for (int i = 0; i < vector.length; i++) {
             vector[i] = (float) (vector[i] / norm);
         }
@@ -99,7 +119,8 @@ public final class MobileFaceNetEngine implements AutoCloseable {
     public static double cosineSimilarity(float[] a, float[] b) {
         if (a == null || b == null || a.length != b.length) {
             throw new IllegalArgumentException(
-                    "Descriptor dimensions do not match.");
+                    "Descriptor dimensions do not match."
+            );
         }
 
         double dot = 0.0;
@@ -112,17 +133,22 @@ public final class MobileFaceNetEngine implements AutoCloseable {
             normB += b[i] * b[i];
         }
 
-        double denom = Math.sqrt(normA) * Math.sqrt(normB);
-        return denom <= 1e-12 ? -1.0 : dot / denom;
+        double denominator = Math.sqrt(normA) * Math.sqrt(normB);
+
+        if (denominator <= 1e-12) {
+            return -1.0;
+        }
+
+        return dot / denominator;
     }
 
     private static ByteBuffer loadModel(
-            Context context, String assetName) throws IOException {
+            Context context,
+            String assetName
+    ) throws IOException {
 
-        try (InputStream inputStream =
-                     context.getAssets().open(assetName);
-             ByteArrayOutputStream outputStream =
-                     new ByteArrayOutputStream()) {
+        try (InputStream inputStream = context.getAssets().open(assetName);
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
 
             byte[] buffer = new byte[64 * 1024];
             int read;
@@ -136,7 +162,8 @@ public final class MobileFaceNetEngine implements AutoCloseable {
             if (bytes.length < 1_000_000) {
                 throw new IOException(
                         "mobilefacenet.tflite missing/invalid. " +
-                        "Run tools/download-model.ps1 before building.");
+                        "Keep the model in src/android/assets."
+                );
             }
 
             ByteBuffer direct = ByteBuffer
@@ -145,6 +172,7 @@ public final class MobileFaceNetEngine implements AutoCloseable {
 
             direct.put(bytes);
             direct.rewind();
+
             return direct;
         }
     }
@@ -154,4 +182,3 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         interpreter.close();
     }
 }
-
