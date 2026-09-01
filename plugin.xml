@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         id="com.company.faceidnative"
-        version="1.0.2">
+        version="1.0.3">
   <name>FaceIDNative</name>
   <description>Offline native face recognition for OutSystems O11 Android.</description>
   <license>MIT</license>

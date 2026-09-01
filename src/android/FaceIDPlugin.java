@@ -34,6 +34,7 @@ public class FaceIDPlugin extends CordovaPlugin {
     private FaceDetector faceDetector;
     private MobileFaceNetEngine engine;
     private final Object engineLock = new Object();
+    private final Object faceDetectorLock = new Object();
 
     @Override
     protected void pluginInitialize() {
@@ -125,8 +126,6 @@ public class FaceIDPlugin extends CordovaPlugin {
 
     private void handleIsAvailable(CallbackContext callbackContext) {
         try {
-            ensureEngine();
-
             JSONObject result = new JSONObject();
             result.put("available", true);
             result.put("embeddingSize",
@@ -336,6 +335,33 @@ public class FaceIDPlugin extends CordovaPlugin {
         }
     }
 
+    private void ensureFaceDetector() {
+
+        if (faceDetector != null) {
+            return;
+        }
+
+        synchronized (faceDetectorLock) {
+
+            if (faceDetector == null) {
+
+                FaceDetectorOptions options =
+                        new FaceDetectorOptions.Builder()
+                                .setPerformanceMode(
+                                        FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                                .setLandmarkMode(
+                                        FaceDetectorOptions.LANDMARK_MODE_ALL)
+                                .setClassificationMode(
+                                        FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                                .setMinFaceSize((float) MIN_FACE_WIDTH_FRACTION)
+                                .build();
+
+                faceDetector =
+                        FaceDetection.getClient(options);
+            }
+        }
+    }
+
     private void ensureEngine() throws Exception {
         if (engine != null) return;
 
@@ -355,6 +381,8 @@ public class FaceIDPlugin extends CordovaPlugin {
             throw new IllegalArgumentException(
                     "Image is empty.");
         }
+
+        ensureFaceDetector();
 
         InputImage input =
                 InputImage.fromBitmap(bitmap, 0);
