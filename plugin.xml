@@ -1,8 +1,8 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="com.company.faceidnative"
-        version="1.0.4">
+        version="1.0.5">
 
     <name>FaceIDNative</name>
     <description>Full-offline native FaceID for OutSystems O11 Android with in-app CameraX capture.</description>
@@ -41,6 +41,7 @@
                      target-dir="app/src/main/java/com/company/faceidnative" />
 
         <resource-file src="src/android/assets/mobilefacenet.tflite"
-                       target="app/src/main/assets/mobilefacenet.tflite" />
+                       target="assets/mobilefacenet.tflite" />
     </platform>
 </plugin>
+
