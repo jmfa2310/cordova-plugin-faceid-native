@@ -2,10 +2,10 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="com.company.faceidnative"
-        version="1.0.7">
+        version="1.0.8">
 
     <name>FaceIDNative</name>
-    <description>Full-offline native FaceID for OutSystems O11 Android with CameraX, five-point alignment, flip-TTA and GhostFaceNet.</description>
+    <description>Slim full-offline native FaceID for OutSystems O11 Android with CameraX, ML Kit and FaceNet 128D.</description>
     <license>MIT</license>
 
     <js-module src="www/FaceID.js" name="FaceID">
@@ -25,7 +25,6 @@
 
         <framework src="com.google.mlkit:face-detection:16.1.7" />
         <framework src="org.tensorflow:tensorflow-lite:2.14.0" />
-        <framework src="org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0" />
 
         <framework src="androidx.camera:camera-core:1.5.3" />
         <framework src="androidx.camera:camera-camera2:1.5.3" />
@@ -40,7 +39,7 @@
         <source-file src="src/android/MobileFaceNetEngine.java"
                      target-dir="app/src/main/java/com/company/faceidnative" />
 
-        <resource-file src="src/android/assets/ghostfacenet_float16.tflite"
-                       target="assets/ghostfacenet_float16.tflite" />
+        <resource-file src="src/android/assets/facenet.tflite"
+                       target="assets/facenet.tflite" />
     </platform>
 </plugin>

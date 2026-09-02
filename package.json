@@ -1,7 +1,7 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.0.7",
-  "description": "Full-offline native FaceID with CameraX, five-point face alignment, flip-TTA and GhostFaceNet embeddings for OutSystems O11 Android.",
+  "version": "1.0.8",
+  "description": "Slim full-offline native FaceID for OutSystems O11 Android: CameraX + ML Kit + FaceNet 128D using standard TensorFlow Lite only.",
   "cordova": {
     "id": "com.company.faceidnative",
     "platforms": [
@@ -16,9 +16,9 @@
     "offline",
     "camerax",
     "mlkit",
-    "ghostfacenet",
-    "arcface",
-    "tflite"
+    "facenet",
+    "tensorflow-lite",
+    "slim"
   ],
   "license": "MIT"
 }

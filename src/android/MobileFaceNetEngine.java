@@ -13,9 +13,9 @@ import java.nio.ByteOrder;
 
 public final class MobileFaceNetEngine implements AutoCloseable {
 
-    public static final int INPUT_SIZE = 112;
-    public static final int EMBEDDING_SIZE = 512;
-    private static final String MODEL_ASSET = "ghostfacenet_float16.tflite";
+    public static final int INPUT_SIZE = 160;
+    public static final int EMBEDDING_SIZE = 128;
+    private static final String MODEL_ASSET = "facenet.tflite";
 
     private final Interpreter interpreter;
 
@@ -40,7 +40,7 @@ public final class MobileFaceNetEngine implements AutoCloseable {
                 inputShape[3] != 3) {
             interpreter.close();
             throw new IllegalStateException(
-                    "Unexpected model input. Expected [1,112,112,3]."
+                    "Unexpected model input. Expected [1,160,160,3]."
             );
         }
 
@@ -49,7 +49,7 @@ public final class MobileFaceNetEngine implements AutoCloseable {
                 outputShape[1] != EMBEDDING_SIZE) {
             interpreter.close();
             throw new IllegalStateException(
-                    "Unexpected model output. Expected [1,512]."
+                    "Unexpected model output. Expected [1,128]."
             );
         }
     }
@@ -82,9 +82,9 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         );
 
         for (int pixel : pixels) {
-            input.putFloat((((pixel >> 16) & 0xFF) - 127.5f) * 0.0078125f);
-            input.putFloat((((pixel >> 8) & 0xFF) - 127.5f) * 0.0078125f);
-            input.putFloat(((pixel & 0xFF) - 127.5f) * 0.0078125f);
+            input.putFloat((((pixel >> 16) & 0xFF) - 127.5f) / 127.5f);
+            input.putFloat((((pixel >> 8) & 0xFF) - 127.5f) / 127.5f);
+            input.putFloat(((pixel & 0xFF) - 127.5f) / 127.5f);
         }
 
         input.rewind();
@@ -161,8 +161,8 @@ public final class MobileFaceNetEngine implements AutoCloseable {
 
             if (bytes.length < 1_000_000) {
                 throw new IOException(
-                        "ghostfacenet_float16.tflite missing/invalid. " +
-                        "Run the v1.0.7 patch script to download the model."
+                        "facenet.tflite missing/invalid. " +
+                        "Run the v1.0.8 patch script to download the model."
                 );
             }
 

@@ -200,7 +200,7 @@ public class FaceIDPlugin extends CordovaPlugin {
                          cordova.getActivity()
                                  .getApplicationContext()
                                  .getAssets()
-                                 .open("ghostfacenet_float16.tflite")) {
+                                 .open("facenet.tflite")) {
 
                 modelPresent = true;
             }
@@ -215,8 +215,8 @@ public class FaceIDPlugin extends CordovaPlugin {
                     "captureMode",
                     "CAMERAX_IN_APP"
             );
-            result.put("model", "GHOSTFACENET_512D");
-            result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_V2");
+            result.put("model", "FACENET_128D_SLIM");
+            result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_160_V3");
 
             callbackContext.success(result);
 
@@ -790,9 +790,9 @@ public class FaceIDPlugin extends CordovaPlugin {
             );
             result.put(
                     "preprocess",
-                    "LANDMARK_ALIGN_5PT_TTA_V2"
+                    "LANDMARK_ALIGN_5PT_TTA_160_V3"
             );
-            result.put("model", "GHOSTFACENET_512D");
+            result.put("model", "FACENET_128D_SLIM");
             result.put("mirrorUsed", true);
 
             if (found && best != null) {
@@ -1308,7 +1308,7 @@ public class FaceIDPlugin extends CordovaPlugin {
     }
 
     /**
-     * Aligns the face to the canonical 112x112 geometry used by common
+     * Aligns the face to the canonical 160x160 geometry used by common
      * MobileFaceNet/ArcFace pipelines. Three landmarks are enough for an
      * affine transformation: image-left eye, image-right eye and nose base.
      *
@@ -1321,7 +1321,7 @@ public class FaceIDPlugin extends CordovaPlugin {
      *
      * Uses both eyes, nose base and both mouth corners. A least-squares
      * similarity transform (scale + rotation + translation, no perspective)
-     * maps the detected landmarks to the canonical 112x112 ArcFace template.
+     * maps the detected landmarks to the canonical 160x160 face template.
      *
      * Falls back to the previous 3/2 point transform if mouth landmarks are
      * unavailable.
@@ -1394,11 +1394,11 @@ public class FaceIDPlugin extends CordovaPlugin {
             };
 
             PointF[] dst = new PointF[] {
-                    new PointF(38.2946f, 51.6963f),
-                    new PointF(73.5318f, 51.5014f),
-                    new PointF(56.0252f, 71.7366f),
-                    new PointF(41.5493f, 92.3655f),
-                    new PointF(70.7299f, 92.2041f)
+                    new PointF(54.7066f, 73.8519f),
+                    new PointF(105.0454f, 73.5734f),
+                    new PointF(80.0360f, 102.4809f),
+                    new PointF(59.3561f, 131.9507f),
+                    new PointF(101.0427f, 131.7201f)
             };
 
             transform =
@@ -1424,9 +1424,9 @@ public class FaceIDPlugin extends CordovaPlugin {
                 };
 
                 float[] dst = new float[] {
-                        38.2946f, 51.6963f,
-                        73.5318f, 51.5014f,
-                        56.0252f, 71.7366f
+                        54.7066f, 73.8519f,
+                        105.0454f, 73.5734f,
+                        80.0360f, 102.4809f
                 };
 
                 Matrix fallback = new Matrix();
@@ -1448,8 +1448,8 @@ public class FaceIDPlugin extends CordovaPlugin {
             };
 
             float[] dst = new float[] {
-                    38.2946f, 51.6963f,
-                    73.5318f, 51.5014f
+                    54.7066f, 73.8519f,
+                    105.0454f, 73.5734f
             };
 
             Matrix fallback = new Matrix();
