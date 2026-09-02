@@ -1,10 +1,12 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.0.6",
-  "description": "Full-offline native FaceID with CameraX, landmark alignment and mirror fallback for OutSystems O11 Android.",
+  "version": "1.0.7",
+  "description": "Full-offline native FaceID with CameraX, five-point face alignment, flip-TTA and GhostFaceNet embeddings for OutSystems O11 Android.",
   "cordova": {
     "id": "com.company.faceidnative",
-    "platforms": ["android"]
+    "platforms": [
+      "android"
+    ]
   },
   "keywords": [
     "ecosystem:cordova",
@@ -14,7 +16,9 @@
     "offline",
     "camerax",
     "mlkit",
-    "mobilefacenet"
+    "ghostfacenet",
+    "arcface",
+    "tflite"
   ],
   "license": "MIT"
 }

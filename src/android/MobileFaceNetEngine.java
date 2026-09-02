@@ -14,8 +14,8 @@ import java.nio.ByteOrder;
 public final class MobileFaceNetEngine implements AutoCloseable {
 
     public static final int INPUT_SIZE = 112;
-    public static final int EMBEDDING_SIZE = 192;
-    private static final String MODEL_ASSET = "mobilefacenet.tflite";
+    public static final int EMBEDDING_SIZE = 512;
+    private static final String MODEL_ASSET = "ghostfacenet_float16.tflite";
 
     private final Interpreter interpreter;
 
@@ -49,7 +49,7 @@ public final class MobileFaceNetEngine implements AutoCloseable {
                 outputShape[1] != EMBEDDING_SIZE) {
             interpreter.close();
             throw new IllegalStateException(
-                    "Unexpected model output. Expected [1,192]."
+                    "Unexpected model output. Expected [1,512]."
             );
         }
     }
@@ -82,9 +82,9 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         );
 
         for (int pixel : pixels) {
-            input.putFloat((((pixel >> 16) & 0xFF) - 127.5f) / 128.0f);
-            input.putFloat((((pixel >> 8) & 0xFF) - 127.5f) / 128.0f);
-            input.putFloat(((pixel & 0xFF) - 127.5f) / 128.0f);
+            input.putFloat((((pixel >> 16) & 0xFF) - 127.5f) * 0.0078125f);
+            input.putFloat((((pixel >> 8) & 0xFF) - 127.5f) * 0.0078125f);
+            input.putFloat(((pixel & 0xFF) - 127.5f) * 0.0078125f);
         }
 
         input.rewind();
@@ -161,8 +161,8 @@ public final class MobileFaceNetEngine implements AutoCloseable {
 
             if (bytes.length < 1_000_000) {
                 throw new IOException(
-                        "mobilefacenet.tflite missing/invalid. " +
-                        "Keep the model in src/android/assets."
+                        "ghostfacenet_float16.tflite missing/invalid. " +
+                        "Run the v1.0.7 patch script to download the model."
                 );
             }
 

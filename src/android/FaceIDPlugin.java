@@ -200,7 +200,7 @@ public class FaceIDPlugin extends CordovaPlugin {
                          cordova.getActivity()
                                  .getApplicationContext()
                                  .getAssets()
-                                 .open("mobilefacenet.tflite")) {
+                                 .open("ghostfacenet_float16.tflite")) {
 
                 modelPresent = true;
             }
@@ -215,6 +215,8 @@ public class FaceIDPlugin extends CordovaPlugin {
                     "captureMode",
                     "CAMERAX_IN_APP"
             );
+            result.put("model", "GHOSTFACENET_512D");
+            result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_V2");
 
             callbackContext.success(result);
 
@@ -247,7 +249,7 @@ public class FaceIDPlugin extends CordovaPlugin {
             );
 
             float[] descriptor =
-                    engine.embedding(faceCrop);
+                    embeddingWithFlipTta(faceCrop);
 
             JSONObject result = new JSONObject();
             result.put("success", true);
@@ -707,21 +709,15 @@ public class FaceIDPlugin extends CordovaPlugin {
 
         Bitmap faceCrop =
                 detectAndCropSingleFace(bitmap);
-        Bitmap mirroredFace = null;
 
         try {
+            // Test-time augmentation: average the embedding of the aligned
+            // face and its horizontal flip, then L2-normalize. Registration
+            // and recognition use exactly the same representation.
             float[] current =
-                    engine.embedding(faceCrop);
-
-            // Camera front previews are commonly mirrored. CameraX's saved
-            // JPEG can differ by device/OEM, so compare a horizontally
-            // mirrored aligned face as a safe fallback.
-            mirroredFace = mirrorHorizontal(faceCrop);
-            float[] currentMirrored =
-                    engine.embedding(mirroredFace);
+                    embeddingWithFlipTta(faceCrop);
 
             EmployeeTemplate best = null;
-            boolean bestUsedMirror = false;
 
             double bestSimilarity = -1.0;
             double secondSimilarity = -1.0;
@@ -729,29 +725,12 @@ public class FaceIDPlugin extends CordovaPlugin {
             for (EmployeeTemplate template :
                     templates) {
 
-                double normalSimilarity =
+                double similarity =
                         MobileFaceNetEngine
                                 .cosineSimilarity(
                                         current,
                                         template.descriptor
                                 );
-
-                double mirroredSimilarity =
-                        MobileFaceNetEngine
-                                .cosineSimilarity(
-                                        currentMirrored,
-                                        template.descriptor
-                                );
-
-                double similarity =
-                        Math.max(
-                                normalSimilarity,
-                                mirroredSimilarity
-                        );
-
-                boolean usedMirror =
-                        mirroredSimilarity >
-                                normalSimilarity;
 
                 if (similarity >
                         bestSimilarity) {
@@ -764,9 +743,6 @@ public class FaceIDPlugin extends CordovaPlugin {
 
                     best =
                             template;
-
-                    bestUsedMirror =
-                            usedMirror;
 
                 } else if (similarity >
                         secondSimilarity) {
@@ -814,12 +790,10 @@ public class FaceIDPlugin extends CordovaPlugin {
             );
             result.put(
                     "preprocess",
-                    "LANDMARK_ALIGN_V1"
+                    "LANDMARK_ALIGN_5PT_TTA_V2"
             );
-            result.put(
-                    "mirrorUsed",
-                    bestUsedMirror
-            );
+            result.put("model", "GHOSTFACENET_512D");
+            result.put("mirrorUsed", true);
 
             if (found && best != null) {
                 result.put(
@@ -856,7 +830,6 @@ public class FaceIDPlugin extends CordovaPlugin {
             return result;
 
         } finally {
-            recycle(mirroredFace);
             recycle(faceCrop);
         }
     }
@@ -1343,30 +1316,32 @@ public class FaceIDPlugin extends CordovaPlugin {
      * anatomical left/right naming. The match path also tests a mirrored copy
      * to tolerate front-camera OEM mirroring differences.
      */
+    /**
+     * Five-point ArcFace-style similarity alignment.
+     *
+     * Uses both eyes, nose base and both mouth corners. A least-squares
+     * similarity transform (scale + rotation + translation, no perspective)
+     * maps the detected landmarks to the canonical 112x112 ArcFace template.
+     *
+     * Falls back to the previous 3/2 point transform if mouth landmarks are
+     * unavailable.
+     */
     private static Bitmap alignFaceFromLandmarks(
             Bitmap bitmap,
             Face face
     ) {
         FaceLandmark leftEyeLandmark =
-                face.getLandmark(
-                        FaceLandmark.LEFT_EYE
-                );
-
+                face.getLandmark(FaceLandmark.LEFT_EYE);
         FaceLandmark rightEyeLandmark =
-                face.getLandmark(
-                        FaceLandmark.RIGHT_EYE
-                );
+                face.getLandmark(FaceLandmark.RIGHT_EYE);
 
         if (leftEyeLandmark == null ||
                 rightEyeLandmark == null) {
             return null;
         }
 
-        PointF eyeA =
-                leftEyeLandmark.getPosition();
-
-        PointF eyeB =
-                rightEyeLandmark.getPosition();
+        PointF eyeA = leftEyeLandmark.getPosition();
+        PointF eyeB = rightEyeLandmark.getPosition();
 
         PointF imageLeftEye;
         PointF imageRightEye;
@@ -1379,62 +1354,92 @@ public class FaceIDPlugin extends CordovaPlugin {
             imageRightEye = eyeA;
         }
 
-        float eyeDistance =
-                distance(
-                        imageLeftEye,
-                        imageRightEye
-                );
-
-        if (eyeDistance < 8.0f) {
+        if (distance(imageLeftEye, imageRightEye) < 8.0f) {
             return null;
         }
 
         FaceLandmark noseLandmark =
-                face.getLandmark(
-                        FaceLandmark.NOSE_BASE
-                );
+                face.getLandmark(FaceLandmark.NOSE_BASE);
+        FaceLandmark mouthALandmark =
+                face.getLandmark(FaceLandmark.MOUTH_LEFT);
+        FaceLandmark mouthBLandmark =
+                face.getLandmark(FaceLandmark.MOUTH_RIGHT);
 
-        Matrix transform =
-                new Matrix();
+        Matrix transform = null;
 
-        boolean transformOk;
+        if (noseLandmark != null &&
+                mouthALandmark != null &&
+                mouthBLandmark != null) {
 
-        if (noseLandmark != null) {
-            PointF nose =
-                    noseLandmark.getPosition();
+            PointF mouthA = mouthALandmark.getPosition();
+            PointF mouthB = mouthBLandmark.getPosition();
 
-            float[] src = new float[] {
-                    imageLeftEye.x,
-                    imageLeftEye.y,
-                    imageRightEye.x,
-                    imageRightEye.y,
-                    nose.x,
-                    nose.y
+            PointF imageLeftMouth;
+            PointF imageRightMouth;
+
+            if (mouthA.x <= mouthB.x) {
+                imageLeftMouth = mouthA;
+                imageRightMouth = mouthB;
+            } else {
+                imageLeftMouth = mouthB;
+                imageRightMouth = mouthA;
+            }
+
+            PointF[] src = new PointF[] {
+                    imageLeftEye,
+                    imageRightEye,
+                    noseLandmark.getPosition(),
+                    imageLeftMouth,
+                    imageRightMouth
             };
 
-            // Canonical 112x112 three-point subset from the widely-used
-            // five-point ArcFace/MobileFaceNet alignment template.
-            float[] dst = new float[] {
-                    38.2946f,
-                    51.6963f,
-                    73.5318f,
-                    51.5014f,
-                    56.0252f,
-                    71.7366f
+            PointF[] dst = new PointF[] {
+                    new PointF(38.2946f, 51.6963f),
+                    new PointF(73.5318f, 51.5014f),
+                    new PointF(56.0252f, 71.7366f),
+                    new PointF(41.5493f, 92.3655f),
+                    new PointF(70.7299f, 92.2041f)
             };
 
-            transformOk =
-                    transform.setPolyToPoly(
+            transform =
+                    estimateSimilarityTransform(
                             src,
-                            0,
-                            dst,
-                            0,
-                            3
+                            dst
                     );
+        }
 
-        } else {
-            // Two-point similarity transform fallback: scale, rotation and
-            // translation based on the eyes only.
+        if (transform == null) {
+            // Fallback: 3-point eye/eye/nose transform.
+            FaceLandmark nose =
+                    face.getLandmark(FaceLandmark.NOSE_BASE);
+
+            if (nose != null) {
+                float[] src = new float[] {
+                        imageLeftEye.x,
+                        imageLeftEye.y,
+                        imageRightEye.x,
+                        imageRightEye.y,
+                        nose.getPosition().x,
+                        nose.getPosition().y
+                };
+
+                float[] dst = new float[] {
+                        38.2946f, 51.6963f,
+                        73.5318f, 51.5014f,
+                        56.0252f, 71.7366f
+                };
+
+                Matrix fallback = new Matrix();
+
+                if (fallback.setPolyToPoly(
+                        src, 0, dst, 0, 3)) {
+                    transform = fallback;
+                }
+            }
+        }
+
+        if (transform == null) {
+            // Last fallback: eyes only.
             float[] src = new float[] {
                     imageLeftEye.x,
                     imageLeftEye.y,
@@ -1443,23 +1448,19 @@ public class FaceIDPlugin extends CordovaPlugin {
             };
 
             float[] dst = new float[] {
-                    38.2946f,
-                    51.6963f,
-                    73.5318f,
-                    51.5014f
+                    38.2946f, 51.6963f,
+                    73.5318f, 51.5014f
             };
 
-            transformOk =
-                    transform.setPolyToPoly(
-                            src,
-                            0,
-                            dst,
-                            0,
-                            2
-                    );
+            Matrix fallback = new Matrix();
+
+            if (fallback.setPolyToPoly(
+                    src, 0, dst, 0, 2)) {
+                transform = fallback;
+            }
         }
 
-        if (!transformOk) {
+        if (transform == null) {
             return null;
         }
 
@@ -1470,12 +1471,8 @@ public class FaceIDPlugin extends CordovaPlugin {
                         Bitmap.Config.ARGB_8888
                 );
 
-        Canvas canvas =
-                new Canvas(aligned);
-
-        canvas.drawColor(
-                Color.BLACK
-        );
+        Canvas canvas = new Canvas(aligned);
+        canvas.drawColor(Color.BLACK);
 
         Paint paint =
                 new Paint(
@@ -1491,6 +1488,161 @@ public class FaceIDPlugin extends CordovaPlugin {
         );
 
         return aligned;
+    }
+
+    /**
+     * Least-squares 2D similarity transform:
+     *
+     * x' = a*x - b*y + tx
+     * y' = b*x + a*y + ty
+     *
+     * This is stable with 5 landmarks and avoids perspective distortion.
+     */
+    private static Matrix estimateSimilarityTransform(
+            PointF[] src,
+            PointF[] dst
+    ) {
+        if (src == null ||
+                dst == null ||
+                src.length != dst.length ||
+                src.length < 2) {
+            return null;
+        }
+
+        double srcMeanX = 0.0;
+        double srcMeanY = 0.0;
+        double dstMeanX = 0.0;
+        double dstMeanY = 0.0;
+
+        for (int i = 0; i < src.length; i++) {
+            srcMeanX += src[i].x;
+            srcMeanY += src[i].y;
+            dstMeanX += dst[i].x;
+            dstMeanY += dst[i].y;
+        }
+
+        srcMeanX /= src.length;
+        srcMeanY /= src.length;
+        dstMeanX /= dst.length;
+        dstMeanY /= dst.length;
+
+        double denom = 0.0;
+        double numA = 0.0;
+        double numB = 0.0;
+
+        for (int i = 0; i < src.length; i++) {
+            double sx = src[i].x - srcMeanX;
+            double sy = src[i].y - srcMeanY;
+            double dx = dst[i].x - dstMeanX;
+            double dy = dst[i].y - dstMeanY;
+
+            denom += sx * sx + sy * sy;
+            numA += sx * dx + sy * dy;
+            numB += sx * dy - sy * dx;
+        }
+
+        if (denom < 1e-9) {
+            return null;
+        }
+
+        double a = numA / denom;
+        double b = numB / denom;
+
+        double tx =
+                dstMeanX -
+                        a * srcMeanX +
+                        b * srcMeanY;
+
+        double ty =
+                dstMeanY -
+                        b * srcMeanX -
+                        a * srcMeanY;
+
+        float[] values = new float[] {
+                (float) a,
+                (float) -b,
+                (float) tx,
+
+                (float) b,
+                (float) a,
+                (float) ty,
+
+                0.0f,
+                0.0f,
+                1.0f
+        };
+
+        Matrix matrix = new Matrix();
+        matrix.setValues(values);
+
+        return matrix;
+    }
+
+    /**
+     * Flip test-time augmentation used on BOTH enrollment and recognition.
+     * Average normal + mirrored embeddings, then normalize the centroid.
+     */
+    private float[] embeddingWithFlipTta(
+            Bitmap alignedFace
+    ) {
+        Bitmap mirrored = null;
+
+        try {
+            float[] normal =
+                    engine.embedding(alignedFace);
+
+            mirrored =
+                    mirrorHorizontal(alignedFace);
+
+            float[] flipped =
+                    engine.embedding(mirrored);
+
+            float[] averaged =
+                    new float[
+                            MobileFaceNetEngine
+                                    .EMBEDDING_SIZE
+                            ];
+
+            double sumSquares = 0.0;
+
+            for (int i = 0;
+                 i < averaged.length;
+                 i++) {
+
+                averaged[i] =
+                        (normal[i] + flipped[i]) *
+                                0.5f;
+
+                sumSquares +=
+                        averaged[i] *
+                                averaged[i];
+            }
+
+            double norm =
+                    Math.sqrt(
+                            Math.max(
+                                    sumSquares,
+                                    1e-12
+                            )
+                    );
+
+            for (int i = 0;
+                 i < averaged.length;
+                 i++) {
+
+                averaged[i] =
+                        (float)
+                                (
+                                        averaged[i] /
+                                        norm
+                                );
+            }
+
+            return averaged;
+
+        } finally {
+            recycle(mirrored);
+        }
     }
 
     private static float distance(
