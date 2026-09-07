@@ -32,6 +32,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -39,8 +40,8 @@ public class FaceIDPlugin extends CordovaPlugin {
 
     private static final int CAMERA_PERMISSION_REQUEST = 4104;
 
-    private static final double DEFAULT_THRESHOLD = 0.60;
-    private static final double DEFAULT_MIN_GAP = 0.05;
+    private static final double DEFAULT_THRESHOLD = 0.55;
+    private static final double DEFAULT_MIN_GAP = 0.03;
     private static final double MIN_FACE_WIDTH_FRACTION = 0.15;
 
     private static final int MAX_DECODE_DIMENSION = 1600;
@@ -51,8 +52,10 @@ public class FaceIDPlugin extends CordovaPlugin {
     private final Object engineLock = new Object();
     private final Object detectorLock = new Object();
     private final Object captureLock = new Object();
+    private final Object protectionLock = new Object();
 
     private MobileFaceNetEngine engine;
+    private volatile TemplateProtector protector;
     private FaceDetector faceDetector;
     private FaceCameraOverlay cameraOverlay;
 
@@ -78,6 +81,26 @@ public class FaceIDPlugin extends CordovaPlugin {
             case "isAvailable":
                 cordova.getThreadPool().execute(
                         () -> handleIsAvailable(callbackContext)
+                );
+                return true;
+
+            case "setProtectionKey": {
+                final String protectionKey = args.getString(0);
+                final int templateVersion = Math.max(1, args.optInt(1, 1));
+
+                cordova.getThreadPool().execute(
+                        () -> handleSetProtectionKey(
+                                protectionKey,
+                                templateVersion,
+                                callbackContext
+                        )
+                );
+                return true;
+            }
+
+            case "clearProtectionKey":
+                cordova.getThreadPool().execute(
+                        () -> handleClearProtectionKey(callbackContext)
                 );
                 return true;
 
@@ -155,7 +178,7 @@ public class FaceIDPlugin extends CordovaPlugin {
             }
 
             case "clearEmployees":
-                employeeTemplates = Collections.emptyList();
+                wipeAndClearEmployees();
 
                 try {
                     JSONObject result = new JSONObject();
@@ -205,28 +228,98 @@ public class FaceIDPlugin extends CordovaPlugin {
                 modelPresent = true;
             }
 
+            boolean protectionConfigured =
+                    protector != null ||
+                    SecureProtectionStore.exists(
+                            cordova.getActivity().getApplicationContext()
+                    );
+
             JSONObject result = new JSONObject();
             result.put("available", modelPresent);
-            result.put(
-                    "embeddingSize",
-                    MobileFaceNetEngine.EMBEDDING_SIZE
-            );
-            result.put(
-                    "captureMode",
-                    "CAMERAX_IN_APP"
-            );
+            result.put("embeddingSize", MobileFaceNetEngine.EMBEDDING_SIZE);
+            result.put("captureMode", "CAMERAX_IN_APP");
             result.put("model", "FACENET_128D_SLIM");
             result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_160_V3");
+            result.put("templateProtection", TemplateProtector.SCHEME);
+            result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
+            result.put("protectionConfigured", protectionConfigured);
 
             callbackContext.success(result);
 
         } catch (Exception e) {
-            callbackContext.error(
-                    message(
-                            "FACEID_NOT_AVAILABLE",
-                            e
-                    )
+            callbackContext.error(message("FACEID_NOT_AVAILABLE", e));
+        }
+    }
+
+    private void handleSetProtectionKey(
+            String protectionKey,
+            int templateVersion,
+            CallbackContext callbackContext
+    ) {
+        byte[] masterKey = null;
+
+        try {
+            masterKey = TemplateProtector.deriveMasterKey(protectionKey);
+
+            SecureProtectionStore.save(
+                    cordova.getActivity().getApplicationContext(),
+                    masterKey,
+                    templateVersion
             );
+
+            TemplateProtector replacement =
+                    new TemplateProtector(masterKey, templateVersion);
+
+            synchronized (protectionLock) {
+                if (protector != null) {
+                    try { protector.close(); } catch (Exception ignored) {}
+                }
+                protector = replacement;
+            }
+
+            // Loaded templates are tied to a specific protection key/version.
+            wipeAndClearEmployees();
+
+            JSONObject result = new JSONObject();
+            result.put("success", true);
+            result.put("templateVersion", templateVersion);
+            result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
+            result.put("scheme", TemplateProtector.SCHEME);
+            callbackContext.success(result);
+
+        } catch (Exception e) {
+            callbackContext.error(message("PROTECTION_SETUP_FAILED", e));
+
+        } finally {
+            if (masterKey != null) {
+                Arrays.fill(masterKey, (byte) 0);
+            }
+        }
+    }
+
+    private void handleClearProtectionKey(
+            CallbackContext callbackContext
+    ) {
+        try {
+            SecureProtectionStore.clear(
+                    cordova.getActivity().getApplicationContext()
+            );
+
+            synchronized (protectionLock) {
+                if (protector != null) {
+                    try { protector.close(); } catch (Exception ignored) {}
+                    protector = null;
+                }
+            }
+
+            wipeAndClearEmployees();
+
+            JSONObject result = new JSONObject();
+            result.put("success", true);
+            callbackContext.success(result);
+
+        } catch (Exception e) {
+            callbackContext.error(message("PROTECTION_CLEAR_FAILED", e));
         }
     }
 
@@ -236,43 +329,42 @@ public class FaceIDPlugin extends CordovaPlugin {
     ) {
         Bitmap bitmap = null;
         Bitmap faceCrop = null;
+        float[] embedding = null;
+        byte[] protectedCode = null;
 
         try {
             ensureEngine();
+            TemplateProtector currentProtector = ensureProtector();
 
-            bitmap = decodeBase64BitmapOriented(
-                    imageBase64
-            );
+            bitmap = decodeBase64BitmapOriented(imageBase64);
+            faceCrop = detectAndCropSingleFace(bitmap);
 
-            faceCrop = detectAndCropSingleFace(
-                    bitmap
-            );
-
-            float[] descriptor =
-                    embeddingWithFlipTta(faceCrop);
+            embedding = embeddingWithFlipTta(faceCrop);
+            protectedCode = currentProtector.protect(embedding);
+            String protectedTemplate = currentProtector.encode(protectedCode);
 
             JSONObject result = new JSONObject();
             result.put("success", true);
-            result.put(
-                    "descriptor",
-                    descriptorToJson(descriptor).toString()
-            );
-            result.put(
-                    "embeddingSize",
-                    MobileFaceNetEngine.EMBEDDING_SIZE
-            );
+            // Keep the old field name so the OutSystems wrapper/flow does not break.
+            // The value is now PT1:<version>:<base64>, never the raw 128 floats.
+            result.put("descriptor", protectedTemplate);
+            result.put("embeddingSize", MobileFaceNetEngine.EMBEDDING_SIZE);
+            result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
+            result.put("templateVersion", currentProtector.getVersion());
+            result.put("templateProtection", TemplateProtector.SCHEME);
 
             callbackContext.success(result);
 
         } catch (Exception e) {
-            callbackContext.error(
-                    message(
-                            "DESCRIPTOR_FAILED",
-                            e
-                    )
-            );
+            callbackContext.error(message("DESCRIPTOR_FAILED", e));
 
         } finally {
+            if (embedding != null) {
+                Arrays.fill(embedding, 0.0f);
+            }
+            if (protectedCode != null) {
+                Arrays.fill(protectedCode, (byte) 0);
+            }
             recycle(faceCrop);
             recycle(bitmap);
         }
@@ -283,136 +375,79 @@ public class FaceIDPlugin extends CordovaPlugin {
             CallbackContext callbackContext
     ) {
         try {
-            JSONArray array =
-                    new JSONArray(employeesJson);
+            TemplateProtector currentProtector = ensureProtector();
+            JSONArray array = new JSONArray(employeesJson);
 
-            List<EmployeeTemplate> parsed =
-                    new ArrayList<>();
-
+            List<EmployeeTemplate> parsed = new ArrayList<>();
             int skipped = 0;
 
-            for (int i = 0;
-                 i < array.length();
-                 i++) {
-
-                JSONObject item =
-                        array.optJSONObject(i);
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject item = array.optJSONObject(i);
 
                 if (item == null) {
                     skipped++;
                     continue;
                 }
 
-                if (item.has("Active") &&
-                        !item.optBoolean(
-                                "Active",
-                                true
-                        )) {
+                if (item.has("Active") && !item.optBoolean("Active", true)) {
                     continue;
                 }
 
-                String employeeId =
-                        firstNonEmpty(
-                                item.optString(
-                                        "EmployeeId",
-                                        ""
-                                ),
-                                item.optString(
-                                        "employeeId",
-                                        ""
-                                )
-                        );
+                String employeeId = firstNonEmpty(
+                        item.optString("EmployeeId", ""),
+                        item.optString("employeeId", "")
+                );
 
-                String name =
-                        firstNonEmpty(
-                                item.optString(
-                                        "Name",
-                                        ""
-                                ),
-                                item.optString(
-                                        "EmployeeName",
-                                        ""
-                                ),
-                                item.optString(
-                                        "name",
-                                        ""
-                                )
-                        );
+                String name = firstNonEmpty(
+                        item.optString("Name", ""),
+                        item.optString("EmployeeName", ""),
+                        item.optString("name", "")
+                );
 
-                Object descriptorValue = null;
-
-                if (item.has(
-                        "FaceDescriptorJson"
-                )) {
-                    descriptorValue =
-                            item.opt(
-                                    "FaceDescriptorJson"
-                            );
-
-                } else if (item.has(
-                        "DescriptorJson"
-                )) {
-                    descriptorValue =
-                            item.opt(
-                                    "DescriptorJson"
-                            );
-
-                } else if (item.has(
-                        "descriptor"
-                )) {
-                    descriptorValue =
-                            item.opt(
-                                    "descriptor"
-                            );
+                Object templateValue = null;
+                if (item.has("ProtectedTemplate")) {
+                    templateValue = item.opt("ProtectedTemplate");
+                } else if (item.has("FaceTemplate")) {
+                    templateValue = item.opt("FaceTemplate");
+                } else if (item.has("FaceDescriptorJson")) {
+                    templateValue = item.opt("FaceDescriptorJson");
+                } else if (item.has("DescriptorJson")) {
+                    templateValue = item.opt("DescriptorJson");
+                } else if (item.has("descriptor")) {
+                    templateValue = item.opt("descriptor");
                 }
 
-                float[] descriptor =
-                        parseDescriptor(
-                                descriptorValue
-                        );
+                byte[] protectedTemplate = templateValue == null
+                        ? null
+                        : currentProtector.decode(String.valueOf(templateValue));
 
-                if (employeeId.isEmpty() ||
-                        descriptor == null) {
+                if (employeeId.isEmpty() || protectedTemplate == null) {
                     skipped++;
                     continue;
                 }
 
-                parsed.add(
-                        new EmployeeTemplate(
-                                employeeId,
-                                name,
-                                descriptor
-                        )
-                );
+                parsed.add(new EmployeeTemplate(
+                        employeeId,
+                        name,
+                        protectedTemplate
+                ));
             }
 
-            employeeTemplates =
-                    Collections.unmodifiableList(
-                            parsed
-                    );
+            List<EmployeeTemplate> previous = employeeTemplates;
+            employeeTemplates = Collections.unmodifiableList(parsed);
+            wipeTemplates(previous);
 
-            JSONObject result =
-                    new JSONObject();
-
+            JSONObject result = new JSONObject();
             result.put("success", true);
-            result.put(
-                    "loaded",
-                    parsed.size()
-            );
-            result.put(
-                    "skipped",
-                    skipped
-            );
+            result.put("loaded", parsed.size());
+            result.put("skipped", skipped);
+            result.put("templateVersion", currentProtector.getVersion());
+            result.put("templateProtection", TemplateProtector.SCHEME);
 
             callbackContext.success(result);
 
         } catch (Exception e) {
-            callbackContext.error(
-                    message(
-                            "SET_EMPLOYEES_FAILED",
-                            e
-                    )
-            );
+            callbackContext.error(message("SET_EMPLOYEES_FAILED", e));
         }
     }
 
@@ -694,142 +729,91 @@ public class FaceIDPlugin extends CordovaPlugin {
     ) throws Exception {
 
         ensureEngine();
+        TemplateProtector currentProtector = ensureProtector();
 
-        List<EmployeeTemplate> templates =
-                employeeTemplates;
+        List<EmployeeTemplate> templates = employeeTemplates;
 
-        if (templates == null ||
-                templates.isEmpty()) {
-
+        if (templates == null || templates.isEmpty()) {
             throw new IllegalStateException(
-                    "NO_EMPLOYEES_LOADED: " +
-                    "Call FaceID_SetEmployees first."
+                    "NO_EMPLOYEES_LOADED: Call FaceID_SetEmployees first."
             );
         }
 
-        Bitmap faceCrop =
-                detectAndCropSingleFace(bitmap);
+        Bitmap faceCrop = detectAndCropSingleFace(bitmap);
+        float[] currentEmbedding = null;
+        byte[] currentProtected = null;
 
         try {
-            // Test-time augmentation: average the embedding of the aligned
-            // face and its horizontal flip, then L2-normalize. Registration
-            // and recognition use exactly the same representation.
-            float[] current =
-                    embeddingWithFlipTta(faceCrop);
+            currentEmbedding = embeddingWithFlipTta(faceCrop);
+            currentProtected = currentProtector.protect(currentEmbedding);
+
+            // Raw embedding is no longer required once transformed.
+            Arrays.fill(currentEmbedding, 0.0f);
+            currentEmbedding = null;
 
             EmployeeTemplate best = null;
-
             double bestSimilarity = -1.0;
             double secondSimilarity = -1.0;
 
-            for (EmployeeTemplate template :
-                    templates) {
+            for (EmployeeTemplate template : templates) {
+                double similarity = currentProtector.similarity(
+                        currentProtected,
+                        template.protectedTemplate
+                );
 
-                double similarity =
-                        MobileFaceNetEngine
-                                .cosineSimilarity(
-                                        current,
-                                        template.descriptor
-                                );
-
-                if (similarity >
-                        bestSimilarity) {
-
-                    secondSimilarity =
-                            bestSimilarity;
-
-                    bestSimilarity =
-                            similarity;
-
-                    best =
-                            template;
-
-                } else if (similarity >
-                        secondSimilarity) {
-
-                    secondSimilarity =
-                            similarity;
+                if (similarity > bestSimilarity) {
+                    secondSimilarity = bestSimilarity;
+                    bestSimilarity = similarity;
+                    best = template;
+                } else if (similarity > secondSimilarity) {
+                    secondSimilarity = similarity;
                 }
             }
 
             boolean aboveThreshold =
-                    best != null &&
-                    bestSimilarity >= threshold;
+                    best != null && bestSimilarity >= threshold;
 
             boolean unambiguous =
                     secondSimilarity < 0.0 ||
-                    (
-                            bestSimilarity -
-                            secondSimilarity
-                    ) >= minGap;
+                    (bestSimilarity - secondSimilarity) >= minGap;
 
-            boolean found =
-                    aboveThreshold &&
-                    unambiguous;
+            boolean found = aboveThreshold && unambiguous;
 
-            JSONObject result =
-                    new JSONObject();
-
+            JSONObject result = new JSONObject();
             result.put("success", true);
             result.put("found", found);
-            result.put(
-                    "similarity",
-                    bestSimilarity
-            );
-            result.put(
-                    "secondSimilarity",
-                    secondSimilarity
-            );
-            result.put(
-                    "threshold",
-                    threshold
-            );
-            result.put(
-                    "minGap",
-                    minGap
-            );
-            result.put(
-                    "preprocess",
-                    "LANDMARK_ALIGN_5PT_TTA_160_V3"
-            );
+            result.put("similarity", bestSimilarity);
+            result.put("secondSimilarity", secondSimilarity);
+            result.put("threshold", threshold);
+            result.put("minGap", minGap);
+            result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_160_V3");
             result.put("model", "FACENET_128D_SLIM");
+            result.put("templateProtection", TemplateProtector.SCHEME);
+            result.put("templateVersion", currentProtector.getVersion());
             result.put("mirrorUsed", true);
 
             if (found && best != null) {
-                result.put(
-                        "employeeId",
-                        best.employeeId
-                );
-                result.put(
-                        "employeeName",
-                        best.name
-                );
-                result.put(
-                        "reason",
-                        "MATCH"
-                );
-
+                result.put("employeeId", best.employeeId);
+                result.put("employeeName", best.name);
+                result.put("reason", "MATCH");
             } else {
-                result.put(
-                        "employeeId",
-                        ""
-                );
-                result.put(
-                        "employeeName",
-                        ""
-                );
-
+                result.put("employeeId", "");
+                result.put("employeeName", "");
                 result.put(
                         "reason",
-                        !aboveThreshold
-                                ? "BELOW_THRESHOLD"
-                                : "AMBIGUOUS"
+                        !aboveThreshold ? "BELOW_THRESHOLD" : "AMBIGUOUS"
                 );
             }
 
             return result;
 
         } finally {
+            if (currentEmbedding != null) {
+                Arrays.fill(currentEmbedding, 0.0f);
+            }
+            if (currentProtected != null) {
+                Arrays.fill(currentProtected, (byte) 0);
+            }
             recycle(faceCrop);
         }
     }
@@ -961,6 +945,41 @@ public class FaceIDPlugin extends CordovaPlugin {
                                 cordova.getActivity()
                                         .getApplicationContext()
                         );
+            }
+        }
+    }
+
+
+    private TemplateProtector ensureProtector() throws Exception {
+        TemplateProtector current = protector;
+        if (current != null) {
+            return current;
+        }
+
+        synchronized (protectionLock) {
+            if (protector != null) {
+                return protector;
+            }
+
+            SecureProtectionStore.SavedProtection saved =
+                    SecureProtectionStore.load(
+                            cordova.getActivity().getApplicationContext()
+                    );
+
+            if (saved == null || saved.masterKey == null) {
+                throw new IllegalStateException(
+                        "PROTECTION_NOT_CONFIGURED: Call FaceID_SetProtectionKey once while online."
+                );
+            }
+
+            try {
+                protector = new TemplateProtector(
+                        saved.masterKey,
+                        saved.version
+                );
+                return protector;
+            } finally {
+                Arrays.fill(saved.masterKey, (byte) 0);
             }
         }
     }
@@ -1793,114 +1812,6 @@ public class FaceIDPlugin extends CordovaPlugin {
         );
     }
 
-    private static JSONArray descriptorToJson(
-            float[] descriptor
-    ) throws JSONException {
-
-        JSONArray array =
-                new JSONArray();
-
-        for (float value :
-                descriptor) {
-
-            array.put(
-                    (double) value
-            );
-        }
-
-        return array;
-    }
-
-    private static float[] parseDescriptor(
-            Object raw
-    ) {
-        if (raw == null ||
-                raw == JSONObject.NULL) {
-
-            return null;
-        }
-
-        try {
-            JSONArray values;
-
-            if (raw instanceof JSONArray) {
-                values =
-                        (JSONArray) raw;
-
-            } else {
-                String text =
-                        String.valueOf(raw)
-                                .trim();
-
-                if (text.isEmpty()) {
-                    return null;
-                }
-
-                values =
-                        new JSONArray(
-                                text
-                        );
-            }
-
-            if (values.length() !=
-                    MobileFaceNetEngine
-                            .EMBEDDING_SIZE) {
-
-                return null;
-            }
-
-            float[] descriptor =
-                    new float[
-                            MobileFaceNetEngine
-                                    .EMBEDDING_SIZE
-                            ];
-
-            double sum =
-                    0.0;
-
-            for (int i = 0;
-                 i < descriptor.length;
-                 i++) {
-
-                float value =
-                        (float)
-                        values.getDouble(i);
-
-                descriptor[i] =
-                        value;
-
-                sum +=
-                        value *
-                        value;
-            }
-
-            double norm =
-                    Math.sqrt(
-                            Math.max(
-                                    sum,
-                                    1e-12
-                            )
-                    );
-
-            for (int i = 0;
-                 i < descriptor.length;
-                 i++) {
-
-                descriptor[i] =
-                        (float)
-                        (
-                                descriptor[i] /
-                                norm
-                        );
-            }
-
-            return descriptor;
-
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
     private static String firstNonEmpty(
             String... values
     ) {
@@ -2004,9 +1915,28 @@ public class FaceIDPlugin extends CordovaPlugin {
         }
     }
 
+    private static void wipeTemplates(
+            List<EmployeeTemplate> templates
+    ) {
+        if (templates == null) {
+            return;
+        }
+
+        for (EmployeeTemplate template : templates) {
+            if (template != null && template.protectedTemplate != null) {
+                Arrays.fill(template.protectedTemplate, (byte) 0);
+            }
+        }
+    }
+
+    private void wipeAndClearEmployees() {
+        List<EmployeeTemplate> previous = employeeTemplates;
+        employeeTemplates = Collections.emptyList();
+        wipeTemplates(previous);
+    }
+
     private void disposeNative() {
-        employeeTemplates =
-                Collections.emptyList();
+        wipeAndClearEmployees();
 
         if (cameraOverlay != null) {
             try {
@@ -2043,6 +1973,13 @@ public class FaceIDPlugin extends CordovaPlugin {
                         null;
             }
         }
+
+        synchronized (protectionLock) {
+            if (protector != null) {
+                try { protector.close(); } catch (Exception ignored) {}
+                protector = null;
+            }
+        }
     }
 
     @Override
@@ -2054,21 +1991,16 @@ public class FaceIDPlugin extends CordovaPlugin {
     private static final class EmployeeTemplate {
         final String employeeId;
         final String name;
-        final float[] descriptor;
+        final byte[] protectedTemplate;
 
         EmployeeTemplate(
                 String employeeId,
                 String name,
-                float[] descriptor
+                byte[] protectedTemplate
         ) {
-            this.employeeId =
-                    employeeId;
-
-            this.name =
-                    name;
-
-            this.descriptor =
-                    descriptor;
+            this.employeeId = employeeId;
+            this.name = name;
+            this.protectedTemplate = protectedTemplate;
         }
     }
 }

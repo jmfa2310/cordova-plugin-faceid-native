@@ -1,7 +1,7 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.0.8",
-  "description": "Slim full-offline native FaceID for OutSystems O11 Android: CameraX + ML Kit + FaceNet 128D using standard TensorFlow Lite only.",
+  "version": "1.0.9",
+  "description": "Privacy-hardened offline FaceID: FaceNet 128D in RAM only, keyed cancelable binary protected templates, CameraX + ML Kit.",
   "cordova": {
     "id": "com.company.faceidnative",
     "platforms": [
@@ -18,7 +18,12 @@
     "mlkit",
     "facenet",
     "tensorflow-lite",
-    "slim"
+    "slim",
+    "cancelable-biometrics",
+    "protected-template",
+    "android-keystore",
+    "gdpr",
+    "privacy"
   ],
   "license": "MIT"
 }

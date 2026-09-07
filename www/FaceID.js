@@ -5,6 +5,15 @@ exports.isAvailable = function (success, error) {
     exec(success, error, SERVICE, 'isAvailable', []);
 };
 
+exports.setProtectionKey = function (protectionKey, templateVersion, success, error) {
+    exec(success, error, SERVICE, 'setProtectionKey',
+        [protectionKey, templateVersion]);
+};
+
+exports.clearProtectionKey = function (success, error) {
+    exec(success, error, SERVICE, 'clearProtectionKey', []);
+};
+
 exports.createDescriptor = function (imageBase64, success, error) {
     exec(success, error, SERVICE, 'createDescriptor', [imageBase64]);
 };

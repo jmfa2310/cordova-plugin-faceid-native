@@ -2,10 +2,10 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="com.company.faceidnative"
-        version="1.0.8">
+        version="1.0.9">
 
     <name>FaceIDNative</name>
-    <description>Slim full-offline native FaceID for OutSystems O11 Android with CameraX, ML Kit and FaceNet 128D.</description>
+    <description>Privacy-hardened offline FaceID with keyed cancelable protected templates, Android Keystore, CameraX, ML Kit and FaceNet.</description>
     <license>MIT</license>
 
     <js-module src="www/FaceID.js" name="FaceID">
@@ -37,6 +37,10 @@
         <source-file src="src/android/FaceCameraOverlay.java"
                      target-dir="app/src/main/java/com/company/faceidnative" />
         <source-file src="src/android/MobileFaceNetEngine.java"
+                     target-dir="app/src/main/java/com/company/faceidnative" />
+        <source-file src="src/android/TemplateProtector.java"
+                     target-dir="app/src/main/java/com/company/faceidnative" />
+        <source-file src="src/android/SecureProtectionStore.java"
                      target-dir="app/src/main/java/com/company/faceidnative" />
 
         <resource-file src="src/android/assets/facenet.tflite"

@@ -116,32 +116,6 @@ public final class MobileFaceNetEngine implements AutoCloseable {
         }
     }
 
-    public static double cosineSimilarity(float[] a, float[] b) {
-        if (a == null || b == null || a.length != b.length) {
-            throw new IllegalArgumentException(
-                    "Descriptor dimensions do not match."
-            );
-        }
-
-        double dot = 0.0;
-        double normA = 0.0;
-        double normB = 0.0;
-
-        for (int i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        double denominator = Math.sqrt(normA) * Math.sqrt(normB);
-
-        if (denominator <= 1e-12) {
-            return -1.0;
-        }
-
-        return dot / denominator;
-    }
-
     private static ByteBuffer loadModel(
             Context context,
             String assetName
