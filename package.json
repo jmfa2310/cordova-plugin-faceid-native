@@ -1,7 +1,7 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.1.1",
-  "description": "Cross-platform protected offline FaceID for OutSystems O11 with Android Keystore AES-GCM IV fix.",
+  "version": "1.1.2",
+  "description": "Cross-platform protected offline FaceID with direct native CaptureTemplate enrollment for OutSystems O11.",
   "cordova": {
     "id": "com.company.faceidnative",
     "platforms": [

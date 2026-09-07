@@ -28,6 +28,7 @@ static const double kDefaultMinGap = 0.03;
 @property(nonatomic, copy) NSString *pendingCaptureCallbackId;
 @property(nonatomic) double pendingThreshold;
 @property(nonatomic) double pendingMinGap;
+@property(nonatomic) BOOL pendingCaptureTemplate;
 @property(nonatomic, strong) UIImagePickerController *picker;
 @end
 
@@ -716,6 +717,54 @@ static const double kDefaultMinGap = 0.03;
     }];
 }
 
+- (nullable NSDictionary *)protectedTemplateResultForImage:(UIImage *)image
+                                                          error:(NSError **)error {
+
+    if (![self ensureEngine:error] || ![self ensureProtector:error]) {
+        return nil;
+    }
+
+    UIImage *face =
+            [self detectAndAlignSingleFace:image
+                                    error:error];
+
+    if (!face) return nil;
+
+    float embedding[128] = {0};
+
+    if (![self embeddingWithFlipTTAForAlignedFace:face
+                                           output:embedding
+                                            error:error]) {
+        memset(embedding, 0, sizeof(embedding));
+        return nil;
+    }
+
+    NSData *code =
+            [self.protector protectEmbedding:embedding
+                                       count:128
+                                       error:error];
+
+    memset(embedding, 0, sizeof(embedding));
+
+    if (!code) return nil;
+
+    NSString *protectedTemplate =
+            [self.protector encodeCode:code];
+
+    return @{
+        @"success": @YES,
+        @"protectedTemplate": protectedTemplate,
+        // Compatibility alias: PT2 protected value, never raw FaceNet floats.
+        @"descriptor": protectedTemplate,
+        @"embeddingSize": @128,
+        @"templateBits": @([TemplateProtectorIOS templateBits]),
+        @"templateVersion": @(self.protector.version),
+        @"templateProtection": [TemplateProtectorIOS scheme],
+        @"protectionScope": self.protector.scope,
+        @"keyId": self.protector.keyId
+    };
+}
+
 - (void)setEmployees:(CDVInvokedUrlCommand *)command {
     [self.commandDelegate runInBackground:^{
         NSError *error = nil;
@@ -911,6 +960,34 @@ static const double kDefaultMinGap = 0.03;
 
 #pragma mark - Native camera
 
+- (void)captureTemplate:(CDVInvokedUrlCommand *)command {
+
+    if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypeCamera]) {
+        [self sendError:@"CAMERA_NOT_AVAILABLE"
+             callbackId:command.callbackId];
+        return;
+    }
+
+    self.pendingCaptureCallbackId = command.callbackId;
+    self.pendingCaptureTemplate = YES;
+    self.pendingThreshold = kDefaultThreshold;
+    self.pendingMinGap = kDefaultMinGap;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIImagePickerController *picker = [UIImagePickerController new];
+        picker.sourceType = UIImagePickerControllerSourceTypeCamera;
+        picker.cameraDevice = UIImagePickerControllerCameraDeviceFront;
+        picker.cameraCaptureMode = UIImagePickerControllerCameraCaptureModePhoto;
+        picker.allowsEditing = NO;
+        picker.delegate = self;
+        self.picker = picker;
+
+        [self.viewController presentViewController:picker
+                                         animated:YES
+                                       completion:nil];
+    });
+}
+
 - (void)captureAndMatch:(CDVInvokedUrlCommand *)command {
     double threshold = [self argDouble:command.arguments index:0 fallback:kDefaultThreshold];
     double minGap = [self argDouble:command.arguments index:1 fallback:kDefaultMinGap];
@@ -921,6 +998,7 @@ static const double kDefaultMinGap = 0.03;
     }
 
     self.pendingCaptureCallbackId = command.callbackId;
+    self.pendingCaptureTemplate = NO;
     self.pendingThreshold = threshold;
     self.pendingMinGap = minGap;
 
@@ -946,21 +1024,41 @@ didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey,id> *
     NSString *callbackId = self.pendingCaptureCallbackId;
     double threshold = self.pendingThreshold;
     double minGap = self.pendingMinGap;
+    BOOL captureTemplate = self.pendingCaptureTemplate;
 
     self.pendingCaptureCallbackId = nil;
+    self.pendingCaptureTemplate = NO;
     self.picker = nil;
 
     [picker dismissViewControllerAnimated:YES completion:^{
         [self.commandDelegate runInBackground:^{
             NSError *error = nil;
-            NSDictionary *result =
-                    image ? [self matchImage:[self normalizeOrientation:image]
+            UIImage *normalized =
+                    image ? [self normalizeOrientation:image] : nil;
+
+            NSDictionary *result = nil;
+
+            if (normalized) {
+                if (captureTemplate) {
+                    result =
+                            [self protectedTemplateResultForImage:normalized
+                                                           error:&error];
+                } else {
+                    result =
+                            [self matchImage:normalized
                                   threshold:threshold
                                      minGap:minGap
-                                      error:&error] : nil;
+                                      error:&error];
+                }
+            }
 
             if (!result) {
-                [self sendError:[self messageWithPrefix:@"CAPTURE_MATCH_FAILED" error:error]
+                NSString *prefix =
+                        captureTemplate
+                            ? @"CAPTURE_TEMPLATE_FAILED"
+                            : @"CAPTURE_MATCH_FAILED";
+
+                [self sendError:[self messageWithPrefix:prefix error:error]
                      callbackId:callbackId];
                 return;
             }
@@ -973,6 +1071,7 @@ didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey,id> *
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
     NSString *callbackId = self.pendingCaptureCallbackId;
     self.pendingCaptureCallbackId = nil;
+    self.pendingCaptureTemplate = NO;
     self.picker = nil;
 
     [picker dismissViewControllerAnimated:YES completion:^{
@@ -1002,6 +1101,7 @@ didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey,id> *
         }
         self.picker = nil;
         self.pendingCaptureCallbackId = nil;
+        self.pendingCaptureTemplate = NO;
     });
 
     [self sendOK:@{@"success": @YES}

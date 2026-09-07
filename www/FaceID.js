@@ -92,6 +92,16 @@ exports.findBestMatch = function (
     );
 };
 
+exports.captureTemplate = function (success, error) {
+    exec(
+        success,
+        error,
+        SERVICE,
+        'captureTemplate',
+        []
+    );
+};
+
 exports.captureAndMatch = function (
     threshold,
     minGap,

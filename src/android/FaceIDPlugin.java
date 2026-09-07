@@ -62,6 +62,7 @@ public class FaceIDPlugin extends CordovaPlugin {
     private CallbackContext pendingCaptureCallback;
     private double pendingCaptureThreshold = DEFAULT_THRESHOLD;
     private double pendingCaptureMinGap = DEFAULT_MIN_GAP;
+    private boolean pendingCaptureTemplate = false;
 
     @Override
     protected void pluginInitialize() {
@@ -177,6 +178,13 @@ public class FaceIDPlugin extends CordovaPlugin {
                                 minGap,
                                 callbackContext
                         )
+                );
+                return true;
+            }
+
+            case "captureTemplate": {
+                requestCaptureTemplate(
+                        callbackContext
                 );
                 return true;
             }
@@ -666,11 +674,56 @@ public class FaceIDPlugin extends CordovaPlugin {
             pendingCaptureCallback =
                     callbackContext;
 
+            pendingCaptureTemplate =
+                    false;
+
             pendingCaptureThreshold =
                     threshold;
 
             pendingCaptureMinGap =
                     minGap;
+        }
+
+        if (cordova.hasPermission(
+                Manifest.permission.CAMERA
+        )) {
+            openCameraOverlay();
+
+        } else {
+            cordova.requestPermission(
+                    this,
+                    CAMERA_PERMISSION_REQUEST,
+                    Manifest.permission.CAMERA
+            );
+        }
+    }
+
+    private void requestCaptureTemplate(
+            CallbackContext callbackContext
+    ) {
+        synchronized (captureLock) {
+
+            if (pendingCaptureCallback != null ||
+                    cameraOverlay != null) {
+
+                callbackContext.error(
+                        "CAPTURE_ALREADY_RUNNING"
+                );
+
+                return;
+            }
+
+            pendingCaptureCallback =
+                    callbackContext;
+
+            pendingCaptureTemplate =
+                    true;
+
+            pendingCaptureThreshold =
+                    DEFAULT_THRESHOLD;
+
+            pendingCaptureMinGap =
+                    DEFAULT_MIN_GAP;
         }
 
         if (cordova.hasPermission(
@@ -752,12 +805,108 @@ public class FaceIDPlugin extends CordovaPlugin {
                 });
     }
 
+    private JSONObject createProtectedTemplateFromBitmap(
+            Bitmap bitmap
+    ) throws Exception {
+
+        Bitmap faceCrop = null;
+        float[] embedding = null;
+        byte[] protectedCode = null;
+
+        try {
+            ensureEngine();
+            TemplateProtector currentProtector =
+                    ensureProtector();
+
+            faceCrop =
+                    detectAndCropSingleFace(
+                            bitmap
+                    );
+
+            embedding =
+                    embeddingWithFlipTta(
+                            faceCrop
+                    );
+
+            protectedCode =
+                    currentProtector.protect(
+                            embedding
+                    );
+
+            String protectedTemplate =
+                    currentProtector.encode(
+                            protectedCode
+                    );
+
+            JSONObject result =
+                    new JSONObject();
+
+            result.put("success", true);
+            result.put(
+                    "protectedTemplate",
+                    protectedTemplate
+            );
+
+            // Compatibility alias. The value is PT2 protected data,
+            // never a raw FaceNet embedding.
+            result.put(
+                    "descriptor",
+                    protectedTemplate
+            );
+
+            result.put(
+                    "embeddingSize",
+                    MobileFaceNetEngine.EMBEDDING_SIZE
+            );
+            result.put(
+                    "templateBits",
+                    TemplateProtector.TEMPLATE_BITS
+            );
+            result.put(
+                    "templateVersion",
+                    currentProtector.getVersion()
+            );
+            result.put(
+                    "templateProtection",
+                    TemplateProtector.SCHEME
+            );
+            result.put(
+                    "protectionScope",
+                    currentProtector.getScope()
+            );
+            result.put(
+                    "keyId",
+                    currentProtector.getKeyId()
+            );
+
+            return result;
+
+        } finally {
+            if (embedding != null) {
+                Arrays.fill(
+                        embedding,
+                        0.0f
+                );
+            }
+
+            if (protectedCode != null) {
+                Arrays.fill(
+                        protectedCode,
+                        (byte) 0
+                );
+            }
+
+            recycle(faceCrop);
+        }
+    }
+
     private void processCapturedFile(
             File file
     ) {
         final CallbackContext callback;
         final double threshold;
         final double minGap;
+        final boolean captureTemplate;
 
         synchronized (captureLock) {
             callback =
@@ -768,6 +917,9 @@ public class FaceIDPlugin extends CordovaPlugin {
 
             minGap =
                     pendingCaptureMinGap;
+
+            captureTemplate =
+                    pendingCaptureTemplate;
         }
 
         if (callback == null) {
@@ -785,12 +937,21 @@ public class FaceIDPlugin extends CordovaPlugin {
                                 file
                         );
 
-                JSONObject result =
-                        matchBitmap(
-                                bitmap,
-                                threshold,
-                                minGap
-                        );
+                JSONObject result;
+
+                if (captureTemplate) {
+                    result =
+                            createProtectedTemplateFromBitmap(
+                                    bitmap
+                            );
+                } else {
+                    result =
+                            matchBitmap(
+                                    bitmap,
+                                    threshold,
+                                    minGap
+                            );
+                }
 
                 callback.success(result);
 
@@ -819,30 +980,44 @@ public class FaceIDPlugin extends CordovaPlugin {
         }
 
         if (callback != null) {
-            try {
-                JSONObject result =
-                        new JSONObject();
+            final boolean captureTemplate;
 
-                result.put("success", true);
-                result.put("found", false);
-                result.put("employeeId", "");
-                result.put("employeeName", "");
-                result.put("similarity", -1);
-                result.put(
-                        "secondSimilarity",
-                        -1
-                );
-                result.put(
-                        "reason",
-                        "CANCELLED"
-                );
+            synchronized (captureLock) {
+                captureTemplate =
+                        pendingCaptureTemplate;
+            }
 
-                callback.success(result);
-
-            } catch (JSONException e) {
+            if (captureTemplate) {
                 callback.error(
-                        safeMessage(e)
+                        "CAPTURE_CANCELLED"
                 );
+
+            } else {
+                try {
+                    JSONObject result =
+                            new JSONObject();
+
+                    result.put("success", true);
+                    result.put("found", false);
+                    result.put("employeeId", "");
+                    result.put("employeeName", "");
+                    result.put("similarity", -1);
+                    result.put(
+                            "secondSimilarity",
+                            -1
+                    );
+                    result.put(
+                            "reason",
+                            "CANCELLED"
+                    );
+
+                    callback.success(result);
+
+                } catch (JSONException e) {
+                    callback.error(
+                            safeMessage(e)
+                    );
+                }
             }
         }
 
@@ -2019,6 +2194,9 @@ public class FaceIDPlugin extends CordovaPlugin {
 
             pendingCaptureMinGap =
                     DEFAULT_MIN_GAP;
+
+            pendingCaptureTemplate =
+                    false;
         }
     }
 
