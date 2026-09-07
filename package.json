@@ -1,7 +1,7 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.1.0",
-  "description": "Cross-platform offline FaceID: FaceNet 128D in RAM only, PT2 scope-bound cancelable templates, Android Keystore and iOS Keychain.",
+  "version": "1.1.1",
+  "description": "Cross-platform protected offline FaceID for OutSystems O11 with Android Keystore AES-GCM IV fix.",
   "cordova": {
     "id": "com.company.faceidnative",
     "platforms": [

@@ -9,7 +9,6 @@ import android.util.Base64;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.util.Arrays;
 
 import javax.crypto.Cipher;
@@ -96,19 +95,27 @@ public final class SecureProtectionStore {
         SecretKey wrappingKey =
                 getOrCreateWrappingKey();
 
-        byte[] iv = new byte[12];
-        new SecureRandom().nextBytes(iv);
-
         Cipher cipher =
                 Cipher.getInstance(
                         "AES/GCM/NoPadding"
                 );
 
+        // AndroidKeyStore keys created with
+        // setRandomizedEncryptionRequired(true) MUST generate
+        // their own IV for encryption. Supplying a caller IV
+        // causes: "Caller-provided IV not permitted".
         cipher.init(
                 Cipher.ENCRYPT_MODE,
-                wrappingKey,
-                new GCMParameterSpec(128, iv)
+                wrappingKey
         );
+
+        byte[] iv = cipher.getIV();
+
+        if (iv == null || iv.length == 0) {
+            throw new IllegalStateException(
+                    "AndroidKeyStore did not generate an AES-GCM IV."
+            );
+        }
 
         byte[] encrypted =
                 cipher.doFinal(masterKey);
