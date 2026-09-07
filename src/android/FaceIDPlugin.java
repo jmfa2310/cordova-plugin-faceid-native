@@ -87,22 +87,49 @@ public class FaceIDPlugin extends CordovaPlugin {
             case "setProtectionKey": {
                 final String protectionKey = args.getString(0);
                 final int templateVersion = Math.max(1, args.optInt(1, 1));
+                final String protectionScope =
+                        TemplateProtector.normalizeScope(
+                                args.optString(2, "default")
+                        );
 
                 cordova.getThreadPool().execute(
                         () -> handleSetProtectionKey(
                                 protectionKey,
                                 templateVersion,
+                                protectionScope,
                                 callbackContext
                         )
                 );
                 return true;
             }
 
-            case "clearProtectionKey":
+            case "activateProtectionScope": {
+                final String protectionScope =
+                        TemplateProtector.normalizeScope(
+                                args.optString(0, "default")
+                        );
+
                 cordova.getThreadPool().execute(
-                        () -> handleClearProtectionKey(callbackContext)
+                        () -> handleActivateProtectionScope(
+                                protectionScope,
+                                callbackContext
+                        )
                 );
                 return true;
+            }
+
+            case "clearProtectionKey": {
+                final String protectionScope =
+                        args.optString(0, "");
+
+                cordova.getThreadPool().execute(
+                        () -> handleClearProtectionKey(
+                                protectionScope,
+                                callbackContext
+                        )
+                );
+                return true;
+            }
 
             case "createDescriptor": {
                 final String imageBase64 = args.getString(0);
@@ -230,7 +257,12 @@ public class FaceIDPlugin extends CordovaPlugin {
 
             boolean protectionConfigured =
                     protector != null ||
-                    SecureProtectionStore.exists(
+                    SecureProtectionStore.existsActive(
+                            cordova.getActivity().getApplicationContext()
+                    );
+
+            String activeScope =
+                    SecureProtectionStore.getActiveScope(
                             cordova.getActivity().getApplicationContext()
                     );
 
@@ -243,6 +275,10 @@ public class FaceIDPlugin extends CordovaPlugin {
             result.put("templateProtection", TemplateProtector.SCHEME);
             result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
             result.put("protectionConfigured", protectionConfigured);
+            result.put(
+                    "protectionScope",
+                    activeScope == null ? "" : activeScope
+            );
 
             callbackContext.success(result);
 
@@ -254,21 +290,31 @@ public class FaceIDPlugin extends CordovaPlugin {
     private void handleSetProtectionKey(
             String protectionKey,
             int templateVersion,
+            String protectionScope,
             CallbackContext callbackContext
     ) {
         byte[] masterKey = null;
 
         try {
-            masterKey = TemplateProtector.deriveMasterKey(protectionKey);
+            masterKey =
+                    TemplateProtector.deriveMasterKey(
+                            protectionKey,
+                            protectionScope
+                    );
 
             SecureProtectionStore.save(
                     cordova.getActivity().getApplicationContext(),
+                    protectionScope,
                     masterKey,
                     templateVersion
             );
 
             TemplateProtector replacement =
-                    new TemplateProtector(masterKey, templateVersion);
+                    new TemplateProtector(
+                            masterKey,
+                            templateVersion,
+                            protectionScope
+                    );
 
             synchronized (protectionLock) {
                 if (protector != null) {
@@ -277,7 +323,7 @@ public class FaceIDPlugin extends CordovaPlugin {
                 protector = replacement;
             }
 
-            // Loaded templates are tied to a specific protection key/version.
+            // Loaded employee templates are bound to one scope/key/version.
             wipeAndClearEmployees();
 
             JSONObject result = new JSONObject();
@@ -285,10 +331,85 @@ public class FaceIDPlugin extends CordovaPlugin {
             result.put("templateVersion", templateVersion);
             result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
             result.put("scheme", TemplateProtector.SCHEME);
+            result.put("protectionScope", protectionScope);
+            result.put("keyId", replacement.getKeyId());
+
             callbackContext.success(result);
 
         } catch (Exception e) {
-            callbackContext.error(message("PROTECTION_SETUP_FAILED", e));
+            callbackContext.error(
+                    message("PROTECTION_SETUP_FAILED", e)
+            );
+
+        } finally {
+            if (masterKey != null) {
+                Arrays.fill(masterKey, (byte) 0);
+            }
+        }
+    }
+
+    private void handleActivateProtectionScope(
+            String protectionScope,
+            CallbackContext callbackContext
+    ) {
+        byte[] masterKey = null;
+
+        try {
+            if (!SecureProtectionStore.activate(
+                    cordova.getActivity().getApplicationContext(),
+                    protectionScope
+            )) {
+                throw new IllegalStateException(
+                        "PROTECTION_SCOPE_NOT_PROVISIONED: " +
+                        protectionScope
+                );
+            }
+
+            SecureProtectionStore.SavedProtection saved =
+                    SecureProtectionStore.load(
+                            cordova.getActivity().getApplicationContext(),
+                            protectionScope
+                    );
+
+            if (saved == null || saved.masterKey == null) {
+                throw new IllegalStateException(
+                        "PROTECTION_SCOPE_NOT_PROVISIONED: " +
+                        protectionScope
+                );
+            }
+
+            masterKey = saved.masterKey;
+
+            TemplateProtector replacement =
+                    new TemplateProtector(
+                            masterKey,
+                            saved.version,
+                            saved.scope
+                    );
+
+            synchronized (protectionLock) {
+                if (protector != null) {
+                    try { protector.close(); } catch (Exception ignored) {}
+                }
+                protector = replacement;
+            }
+
+            wipeAndClearEmployees();
+
+            JSONObject result = new JSONObject();
+            result.put("success", true);
+            result.put("templateVersion", saved.version);
+            result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
+            result.put("scheme", TemplateProtector.SCHEME);
+            result.put("protectionScope", saved.scope);
+            result.put("keyId", replacement.getKeyId());
+
+            callbackContext.success(result);
+
+        } catch (Exception e) {
+            callbackContext.error(
+                    message("PROTECTION_ACTIVATE_FAILED", e)
+            );
 
         } finally {
             if (masterKey != null) {
@@ -298,12 +419,27 @@ public class FaceIDPlugin extends CordovaPlugin {
     }
 
     private void handleClearProtectionKey(
+            String protectionScope,
             CallbackContext callbackContext
     ) {
         try {
-            SecureProtectionStore.clear(
-                    cordova.getActivity().getApplicationContext()
-            );
+            String scope =
+                    protectionScope == null ||
+                            protectionScope.trim().isEmpty()
+                            ? SecureProtectionStore.getActiveScope(
+                                    cordova.getActivity()
+                                            .getApplicationContext()
+                            )
+                            : TemplateProtector.normalizeScope(
+                                    protectionScope
+                            );
+
+            if (scope != null) {
+                SecureProtectionStore.clear(
+                        cordova.getActivity().getApplicationContext(),
+                        scope
+                );
+            }
 
             synchronized (protectionLock) {
                 if (protector != null) {
@@ -316,12 +452,20 @@ public class FaceIDPlugin extends CordovaPlugin {
 
             JSONObject result = new JSONObject();
             result.put("success", true);
+            result.put(
+                    "protectionScope",
+                    scope == null ? "" : scope
+            );
+
             callbackContext.success(result);
 
         } catch (Exception e) {
-            callbackContext.error(message("PROTECTION_CLEAR_FAILED", e));
+            callbackContext.error(
+                    message("PROTECTION_CLEAR_FAILED", e)
+            );
         }
     }
+
 
     private void handleCreateDescriptor(
             String imageBase64,
@@ -346,12 +490,14 @@ public class FaceIDPlugin extends CordovaPlugin {
             JSONObject result = new JSONObject();
             result.put("success", true);
             // Keep the old field name so the OutSystems wrapper/flow does not break.
-            // The value is now PT1:<version>:<base64>, never the raw 128 floats.
+            // The value is now PT2:<version>:<keyId>:<base64>, never the raw 128 floats.
             result.put("descriptor", protectedTemplate);
             result.put("embeddingSize", MobileFaceNetEngine.EMBEDDING_SIZE);
             result.put("templateBits", TemplateProtector.TEMPLATE_BITS);
             result.put("templateVersion", currentProtector.getVersion());
             result.put("templateProtection", TemplateProtector.SCHEME);
+            result.put("protectionScope", currentProtector.getScope());
+            result.put("keyId", currentProtector.getKeyId());
 
             callbackContext.success(result);
 
@@ -442,7 +588,9 @@ public class FaceIDPlugin extends CordovaPlugin {
             result.put("loaded", parsed.size());
             result.put("skipped", skipped);
             result.put("templateVersion", currentProtector.getVersion());
-            result.put("templateProtection", TemplateProtector.SCHEME);
+            result.put("templateProtection", TemplateProtector.SCHEME); 
+            result.put("protectionScope", currentProtector.getScope());
+            result.put("keyId", currentProtector.getKeyId());
 
             callbackContext.success(result);
 
@@ -788,7 +936,9 @@ public class FaceIDPlugin extends CordovaPlugin {
             result.put("minGap", minGap);
             result.put("preprocess", "LANDMARK_ALIGN_5PT_TTA_160_V3");
             result.put("model", "FACENET_128D_SLIM");
-            result.put("templateProtection", TemplateProtector.SCHEME);
+            result.put("templateProtection", TemplateProtector.SCHEME); 
+            result.put("protectionScope", currentProtector.getScope());
+            result.put("keyId", currentProtector.getKeyId());
             result.put("templateVersion", currentProtector.getVersion());
             result.put("mirrorUsed", true);
 
@@ -962,20 +1112,21 @@ public class FaceIDPlugin extends CordovaPlugin {
             }
 
             SecureProtectionStore.SavedProtection saved =
-                    SecureProtectionStore.load(
+                    SecureProtectionStore.loadActive(
                             cordova.getActivity().getApplicationContext()
                     );
 
             if (saved == null || saved.masterKey == null) {
                 throw new IllegalStateException(
-                        "PROTECTION_NOT_CONFIGURED: Call FaceID_SetProtectionKey once while online."
+                        "PROTECTION_NOT_CONFIGURED: Provision the company key once online, or activate a previously provisioned scope."
                 );
             }
 
             try {
                 protector = new TemplateProtector(
                         saved.masterKey,
-                        saved.version
+                        saved.version,
+                        saved.scope
                 );
                 return protector;
             } finally {

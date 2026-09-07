@@ -2,10 +2,10 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="com.company.faceidnative"
-        version="1.0.9">
+        version="1.1.0">
 
     <name>FaceIDNative</name>
-    <description>Privacy-hardened offline FaceID with keyed cancelable protected templates, Android Keystore, CameraX, ML Kit and FaceNet.</description>
+    <description>Cross-platform offline FaceID with scope-bound cancelable protected templates, Android Keystore, iOS Keychain, FaceNet and native camera capture.</description>
     <license>MIT</license>
 
     <js-module src="www/FaceID.js" name="FaceID">
@@ -45,5 +45,42 @@
 
         <resource-file src="src/android/assets/facenet.tflite"
                        target="assets/facenet.tflite" />
+    </platform>
+
+    <platform name="ios">
+        <config-file target="config.xml" parent="/*">
+            <feature name="FaceIDPlugin">
+                <param name="ios-package" value="FaceIDPlugin" />
+            </feature>
+        </config-file>
+
+        <preference name="FACEID_CAMERA_USAGE_DESCRIPTION"
+                    default="A câmara é utilizada para verificar a identidade do trabalhador no controlo de assiduidade ou acesso." />
+
+        <config-file target="*-Info.plist" parent="NSCameraUsageDescription">
+            <string>$FACEID_CAMERA_USAGE_DESCRIPTION</string>
+        </config-file>
+
+        <framework src="Vision.framework" />
+        <framework src="AVFoundation.framework" />
+        <framework src="Security.framework" />
+        <framework src="UIKit.framework" />
+        <framework src="CoreGraphics.framework" />
+        <framework src="ImageIO.framework" />
+
+        <framework src="TensorFlowLiteObjC"
+                   type="podspec"
+                   spec="2.17.0" />
+
+        <source-file src="src/ios/FaceIDPlugin.h" />
+        <source-file src="src/ios/FaceIDPlugin.m" />
+        <source-file src="src/ios/FaceNetEngineIOS.h" />
+        <source-file src="src/ios/FaceNetEngineIOS.m" />
+        <source-file src="src/ios/TemplateProtectorIOS.h" />
+        <source-file src="src/ios/TemplateProtectorIOS.m" />
+        <source-file src="src/ios/SecureProtectionStoreIOS.h" />
+        <source-file src="src/ios/SecureProtectionStoreIOS.m" />
+
+        <resource-file src="src/ios/facenet.tflite" />
     </platform>
 </plugin>

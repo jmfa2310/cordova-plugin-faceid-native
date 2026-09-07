@@ -1,29 +1,30 @@
 {
   "name": "cordova-plugin-faceid-native",
-  "version": "1.0.9",
-  "description": "Privacy-hardened offline FaceID: FaceNet 128D in RAM only, keyed cancelable binary protected templates, CameraX + ML Kit.",
+  "version": "1.1.0",
+  "description": "Cross-platform offline FaceID: FaceNet 128D in RAM only, PT2 scope-bound cancelable templates, Android Keystore and iOS Keychain.",
   "cordova": {
     "id": "com.company.faceidnative",
     "platforms": [
-      "android"
+      "android",
+      "ios"
     ]
   },
   "keywords": [
     "ecosystem:cordova",
     "cordova-android",
+    "cordova-ios",
     "outsystems",
     "face-recognition",
     "offline",
-    "camerax",
-    "mlkit",
     "facenet",
     "tensorflow-lite",
-    "slim",
     "cancelable-biometrics",
     "protected-template",
     "android-keystore",
+    "ios-keychain",
     "gdpr",
-    "privacy"
+    "privacy",
+    "multi-tenant"
   ],
   "license": "MIT"
 }
