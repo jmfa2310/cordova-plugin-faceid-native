@@ -763,12 +763,14 @@ public class FaceIDPlugin extends CordovaPlugin {
 
                                             @Override
                                             public void onCaptured(
-                                                    File file
+                                                    File file,
+                                                    String livenessSequence
                                             ) {
                                                 cameraOverlay = null;
 
                                                 processCapturedFile(
-                                                        file
+                                                        file,
+                                                        livenessSequence
                                                 );
                                             }
 
@@ -901,7 +903,8 @@ public class FaceIDPlugin extends CordovaPlugin {
     }
 
     private void processCapturedFile(
-            File file
+            File file,
+            String livenessSequence
     ) {
         final CallbackContext callback;
         final double threshold;
@@ -953,12 +956,22 @@ public class FaceIDPlugin extends CordovaPlugin {
                             );
                 }
 
+                result.put("livenessSuccess", true);
+                result.put("livenessMethod", "ACTIVE_CHALLENGE_V1");
+                result.put(
+                        "livenessSequence",
+                        livenessSequence == null ? "" : livenessSequence
+                );
+                result.put("livenessReason", "PASSED");
+
                 callback.success(result);
 
             } catch (Exception e) {
                 callback.error(
                         message(
-                                "CAPTURE_MATCH_FAILED",
+                                captureTemplate
+                                        ? "CAPTURE_TEMPLATE_FAILED"
+                                        : "CAPTURE_MATCH_FAILED",
                                 e
                         )
                 );
